@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ESP32 LED 控制</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      text-align: center;
+      padding: 2rem;
+      background-color: #f7f7f7;
+    }
+    input, button {
+      font-size: 1.2rem;
+      margin: 1rem;
+    }
+    #status {
+      margin-top: 1rem;
+      font-size: 1.2rem;
+    }
+    #slider-label {
+      margin-top: 2rem;
+    }
+    #wave {
+      margin: 1rem auto;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: rgba(33, 150, 243, 0.4);
+      animation: none;
+    }
+    #wave.active {
+      animation: pulse 1s infinite;
+    }
+    @keyframes pulse {
+      0% {
+        transform: scale(1);
+        opacity: 0.4;
+      }
+      50% {
+        transform: scale(1.4);
+        opacity: 1;
+      }
+      100% {
+        transform: scale(1);
+        opacity: 0.4;
+      }
+    }
+    label.switch {
+      position: relative;
+      display: inline-block;
+      width: 60px;
+      height: 34px;
+    }
+    label.switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    label.slider {
+      position: absolute;
+      cursor: pointer;
+      background-color: #ccc;
+      border-radius: 34px;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      transition: 0.4s;
+    }
+    label.slider:before {
+      position: absolute;
+      content: "";
+      height: 26px;
+      width: 26px;
+      left: 4px;
+      bottom: 4px;
+      background-color: white;
+      transition: 0.4s;
+      border-radius: 50%;
+    }
+    input:checked + label.slider {
+      background-color: #2196f3;
+    }
+    input:checked + label.slider:before {
+      transform: translateX(26px);
+    }
+  </style>
+</head>
+<body>
+  <h1>語音 + 滑桿 控制 ESP32</h1>
+
+  <input id="ipInput" type="text" placeholder="請輸入 ESP32 IP，例如：http://192.168.4.1" style="width: 80%;" />
+
+  <div>
+    <span>🎙 語音控制：</span>
+    <label class="switch">
+      <input type="checkbox" id="voiceToggle" />
+      <label class="slider" for="voiceToggle"></label>
+    </label>
+  </div>
+
+  <div id="wave"></div>
+  <div id="status">尚未啟動語音辨識</div>
+
+  <div id="slider-label">亮度：<span id="brightness-value">128</span>/255</div>
+  <input type="range" id="brightness-slider" min="0" max="255" value="128" />
+
+  <script>
+    const ipInput = document.getElementById("ipInput");
+    const voiceToggle = document.getElementById("voiceToggle");
+    const statusDiv = document.getElementById("status");
+    const slider = document.getElementById("brightness-slider");
+    const brightnessText = document.getElementById("brightness-value");
+    const wave = document.getElementById("wave");
+
+    let isListening = false;
+
+    const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+    recognition.lang = 'zh-TW';
+    recognition.continuous = true;
+    recognition.interimResults = false;
+
+    function speak(text) {
+        const synth = window.speechSynthesis;
+        if (!synth) return;
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.lang = "zh-TW";
+        synth.cancel(); // 清除上一段語音
+        synth.speak(utter);
+      }
+
+    recognition.onstart = () => {
+      wave.classList.add("active");
+      statusDiv.textContent = "🎧 語音辨識已啟動（持續聆聽中）";
+    };
+
+    recognition.onresult = event => {
+      const transcript = event.results[event.results.length - 1][0].transcript.trim();
+      statusDiv.textContent = `辨識結果：「${transcript}」`;
+
+      const esp32_ip = ipInput.value.trim();
+      if (!esp32_ip.startsWith("http")) return;
+
+      if (transcript.includes("開燈")) {
+        fetch(`${esp32_ip}/on`);
+        statusDiv.textContent += " → ✅ 已送出開燈指令";
+        speak("已開燈");
+      } else if (transcript.includes("關燈")) {
+        fetch(`${esp32_ip}/off`);
+        statusDiv.textContent += " → ✅ 已送出關燈指令";
+        speak("已關燈");
+      } else if (transcript.includes("最亮")) {
+        slider.value = 255;
+        brightnessText.textContent = 255;
+        fetch(`${esp32_ip}/brightness?value=255`);
+        statusDiv.textContent += " → 💡 設定為最亮";
+        speak("已設定為最亮");
+      } else if (transcript.includes("超級暗")) {
+        slider.value = 10;
+        brightnessText.textContent = 10;
+        fetch(`${esp32_ip}/brightness?value=10`);
+        statusDiv.textContent += " → 🌑 設定為最暗";
+        speak("已設定為最暗");
+      } else if (transcript.includes("中等")) {
+        slider.value = 128;
+        brightnessText.textContent = 128;
+        fetch(`${esp32_ip}/brightness?value=128`);
+        statusDiv.textContent += " → 🌓 設定為中等亮度";
+        speak("已設定為中等亮度");
+      } else if (/亮度\s*\d+/.test(transcript)) {
+        const match = transcript.match(/亮度\s*(\d+)/);
+        if (match) {
+          const value = Math.min(255, Math.max(0, parseInt(match[1])));
+          slider.value = value;
+          brightnessText.textContent = value;
+          fetch(`${esp32_ip}/brightness?value=${value}`);
+          statusDiv.textContent += ` → 🔆 設定亮度為 ${value}`;
+          speak(`亮度已設定為 ${value}`);
+        }
+      } else if (transcript.includes("亮一點")) {
+        let current = parseInt(slider.value);
+        current = Math.min(255, current + 25);
+        slider.value = current;
+        brightnessText.textContent = current;
+        fetch(`${esp32_ip}/brightness?value=${current}`);
+        statusDiv.textContent += " → ☀️ 增加亮度";
+        speak("亮一點");
+      } else if (transcript.includes("暗一點")) {
+        let current = parseInt(slider.value);
+        current = Math.max(0, current - 25);
+        slider.value = current;
+        brightnessText.textContent = current;
+        fetch(`${esp32_ip}/brightness?value=${current}`);
+        statusDiv.textContent += " → 🌘 減少亮度";
+        speak("暗一點");
+      } else {
+        statusDiv.textContent += " → ⚠️ 無對應指令";
+        speak("無對應指令");
+      }
+      
+
+    recognition.onerror = event => {
+      statusDiv.textContent = "❌ 錯誤：" + event.error;
+    };
+
+    recognition.onend = () => {
+      if (isListening) {
+        recognition.start(); // 確保開啟狀態會自動重啟
+      } else {
+        statusDiv.textContent += "（語音已停止）";
+        wave.classList.remove("active");
+      }
+    };
+}
+
+    voiceToggle.addEventListener("change", () => {
+      isListening = voiceToggle.checked;
+      if (isListening) {
+        const ip = ipInput.value.trim();
+        if (!ip.startsWith("http")) {
+          statusDiv.textContent = "❗ 請輸入有效的 ESP32 IP";
+          voiceToggle.checked = false;
+          isListening = false;
+          return;
+        }
+        recognition.start();
+      } else {
+        recognition.stop();
+      }
+    });
+
+    // 📦 自動重試 fetch 函式
+    async function fetchWithRetry(url, options = {}, retries = 3, delay = 500) {
+      for (let i = 0; i < retries; i++) {
+        try {
+          const res = await fetch(url, options);
+          if (!res.ok && res.status !== 0) throw new Error(`HTTP ${res.status}`);
+          return res;
+        } catch (err) {
+          if (i === retries - 1) throw err;
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+    }
+
+    // 🔆 滑桿亮度控制 (0~255)，含自動重試
+    slider.oninput = () => {
+      const brightness = slider.value;
+      brightnessText.textContent = brightness;
+
+      const esp32_ip = ipInput.value.trim();
+      if (!esp32_ip.startsWith("http")) {
+        statusDiv.textContent = "❗ 請先輸入 ESP32 IP";
+        return;
+      }
+
+      fetchWithRetry(`${esp32_ip}/brightness?value=${brightness}`, { mode: 'no-cors' }, 3, 500)
+        .then(() => {
+          statusDiv.textContent = `✅ 已設定亮度為 ${brightness}`;
+        })
+        .catch(err => {
+          statusDiv.textContent = `❌ 傳送失敗：${err}`;
+        });
+    };
+  </script>
+</body>
+</html>
